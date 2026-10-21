@@ -53,7 +53,7 @@ jobs:
           cd /tmp/npm-test
           echo '{"name":"oidc-test","version":"1.0.0"}' > package.json
           jf npm-config --repo-resolve jk-project-dev-remote
-          jf npm install lodash@4.18.1
+          jf npm install lodash@4.17.21
           echo "npm install from jk-project-dev-remote succeeded - OIDC token has the required read permissions"
 
   test-oidc-npm-raw:
@@ -98,5 +98,5 @@ jobs:
           mkdir -p /tmp/npm-raw-test
           cd /tmp/npm-raw-test
           echo '{"name":"oidc-test","version":"1.0.0"}' > package.json
-          npm install lodash@4.18.1 --no-save
+          npm install lodash@4.17.21 --no-save
           echo "npm install from npm-remote using native npm with OIDC token succeeded"
