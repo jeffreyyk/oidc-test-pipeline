@@ -1,6 +1,6 @@
 # Place this file in .github/workflows/ on the repository's default branch to run it manually.
 # Requires a "default" runner with Node.js/npm and a JFrog OIDC mapping allowing this workflow.
-name: OIDC npm pull push remote debug - JFrog Platform
+name: OIDC npm pull push remote test - JFrog Platform
 
 on:
   workflow_dispatch:
@@ -104,11 +104,23 @@ jobs:
           echo "::add-mask::$OIDC_TOKEN"
           echo "JFROG_ACCESS_TOKEN=$OIDC_TOKEN" >> $GITHUB_ENV
 
+      - name: Diagnose
+        run: |
+          python3 - << 'EOF'
+          import os, json, base64
+          p = os.environ["JFROG_ACCESS_TOKEN"].split(".")[1]
+          p += "=" * (-len(p) % 4)
+          c = json.loads(base64.urlsafe_b64decode(p))
+          print(json.dumps({k: c.get(k) for k in ("sub", "scp", "exp")}, indent=2))
+          EOF
+          jf rt curl -XGET "jk-npm-dev-remote/lodash/-/lodash-4.17.21.tgz" -s -o /tmp/tgz.out -w "tarball HTTP %{http_code}\n"
+          head -c 1500 /tmp/tgz.out; echo
+
       - name: Configure native npm with OIDC token
         run: |
           npm config set registry "${JF_URL}/artifactory/api/npm/jk-npm-dev-remote/"
           npm config set "//${JF_HOSTNAME}/artifactory/api/npm/jk-npm-dev-remote/:_authToken" "$JFROG_ACCESS_TOKEN"
-          npm config set "//${JF_HOSTNAME}/artifactory/api/npm/jk-npm-dev-local/:_authToken" "$JFROG_ACCESS_TOKEN"
+          npm config set "//${JF_HOSTNAME}/artifactory/api/npm/jk-project-dev-local/:_authToken" "$JFROG_ACCESS_TOKEN"
           echo "npm configured with OIDC token"
 
       - name: Pull npm package from npm-remote using native npm - should pass
