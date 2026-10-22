@@ -1,8 +1,8 @@
 # Place this file in .github/workflows/ on the default branch to run it manually.
 # Requires a "default" runner with Node.js/npm and an OIDC mapping allowing this workflow.
-# jk-project-dev-local must already be an npm local repository with read/deploy permissions.
+# jk-npm-dev-local must already be an npm local repository with read/deploy permissions.
 # Test packages remain in Artifactory; each run/attempt publishes a new prerelease version.
-name: OIDC npm Publish Test Suite - JFrog Platform
+name: OIDC npm Publish local Test  - JFrog Platform
 
 on:
   workflow_dispatch:
@@ -23,9 +23,9 @@ permissions:
 env:
   OIDC_PROVIDER_NAME: github-oidc-cba-general
   OIDC_AUDIENCE: cba-github-actions
-  JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'jfrog-poc.saas.cba' }}
-  JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://jfrog-poc.saas.cba' }}
-  NPM_REPOSITORY: jk-project-dev-local
+  JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
+  JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
+  NPM_REPOSITORY: jk-npm-dev-local
   PACKAGE_VERSION: 1.0.0-run.${{ github.run_id }}.${{ github.run_attempt }}
 
 defaults:
@@ -35,7 +35,7 @@ defaults:
 jobs:
   test-oidc-npm:
     name: Publish npm Package - JFrog CLI (OIDC)
-    runs-on: default
+    runs-on: ubuntu-latest
     env:
       PACKAGE_NAME: oidc-npm-cli-test-${{ github.repository_id }}
     steps:
