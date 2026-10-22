@@ -1,6 +1,6 @@
 # Place this file in .github/workflows/ on the repository's default branch to run it manually.
 # Requires a "default" runner with Node.js/npm and a JFrog OIDC mapping allowing this workflow.
-name: OIDC npm pull push remote test - JFrog Platform
+name: OIDC npm pull push remote debug - JFrog Platform
 
 on:
   workflow_dispatch:
