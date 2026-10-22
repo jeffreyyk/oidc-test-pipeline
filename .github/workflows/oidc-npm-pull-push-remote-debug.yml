@@ -1,6 +1,6 @@
 # Place this file in .github/workflows/ on the repository's default branch to run it manually.
 # Requires a "default" runner with Node.js/npm and a JFrog OIDC mapping allowing this workflow.
-name: OIDC npm pull push remote debug - JFrog Platform
+name: OIDC npm pull push remote test - JFrog Platform
 
 on:
   workflow_dispatch:
@@ -52,6 +52,10 @@ jobs:
           jf rt curl -XGET "api/repositories/jk-project-dev-remote" -s -o /dev/null -w "%{http_code}\n"
           jf rt curl -XGET "api/npm/jk-project-dev-remote/lodash" -s -o /dev/null -w "%{http_code}\n"
 
+      - name: Fetch tarball directly
+        run: |
+          jf rt curl -XGET "jk-project-dev-remote/lodash/-/lodash-4.17.21.tgz" -s -o /dev/null -w "%{http_code}\n"
+
       - name: Pull npm package from jk-project-dev-remote - should pass
         run: |
           mkdir -p /tmp/npm-test
@@ -88,6 +92,10 @@ jobs:
         run: |
           jf rt curl -XGET "api/repositories/jk-project-dev-remote" -s -o /dev/null -w "%{http_code}\n"
           jf rt curl -XGET "api/npm/jk-project-dev-remote/lodash" -s -o /dev/null -w "%{http_code}\n"
+
+      - name: Fetch tarball directly
+        run: |
+          jf rt curl -XGET "jk-project-dev-remote/lodash/-/lodash-4.17.21.tgz" -s -o /dev/null -w "%{http_code}\n"
 
       - name: Export OIDC token
         env:
