@@ -84,7 +84,7 @@ jobs:
 
   test-oidc-npm-raw:
     name: Publish npm Package - Native npm with OIDC Token
-    runs-on: default
+    runs-on: ubuntu-latest
     env:
       PACKAGE_NAME: oidc-npm-raw-test-${{ github.repository_id }}
     steps:
