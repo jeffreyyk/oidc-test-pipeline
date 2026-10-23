@@ -1,6 +1,3 @@
-# oidc-test-pipeline
-
-
 # OIDC npm test pipeline for JFrog Platform
 
 GitHub Actions workflows that test npm access to JFrog Artifactory from GitHub Actions **without stored credentials**. Each workflow exchanges a GitHub OIDC token for a short-lived JFrog access token, then runs npm operations against Artifactory in two ways:
@@ -34,9 +31,8 @@ All three workflows are manual (`workflow_dispatch`) and take one input:
 
 ### JFrog
 
-1. **OIDC integration** named `github-oidc-cba-general`, with audience `cba-github-actions`, configured for this GitHub repository.
-2. **Identity mapping** for the provider. Its token scope must name a group, for example `applied-permissions/groups:"jk-cba-oidc"`.
-3. **Permission target(s)** covering the repositories below. The group named in the mapping scope must have these permissions:
+1. **OIDC integration** and **identity mapping** that trust this GitHub repository (see [Identity mapping](#identity-mapping) below).
+2. **Permission target(s)** covering the repositories below. The group named in the mapping's token scope must have these permissions:
 
    | Repository | Type | Permissions for the group |
    |---|---|---|
@@ -48,6 +44,65 @@ All three workflows are manual (`workflow_dispatch`) and take one input:
 > **Important:** a remote repo needs **Deploy/Cache**, not only Read. When Artifactory fetches a package from upstream, it writes it into the repo's cache on behalf of the caller. Without this permission, pulls fail even though the repo is visible.
 
 Repositories in these tests are **not** in a JFrog Project. If you move them into a project, access is governed by project roles and the token needs a matching project-level identity mapping.
+
+## Identity mapping
+
+The workflows never hold a JFrog password or API key. Instead, `jfrog/setup-jfrog-cli` presents GitHub's short-lived OIDC token to JFrog, and JFrog exchanges it for a JFrog access token. Two objects in JFrog control this exchange: the **OIDC integration** (who is trusted) and the **identity mapping** (what the token can do).
+
+![JFrog OIDC integration and identity mapping settings](docs/images/jfrog-identity-mapping.png)
+
+### How the exchange works
+
+1. The workflow requests an OIDC token from GitHub (this needs `permissions: id-token: write`).
+2. `setup-jfrog-cli` sends it to JFrog, naming the provider (`oidc-provider-name`) and audience (`oidc-audience`).
+3. JFrog checks that the token comes from the configured provider URL, was issued for the configured audience, and that its claims match an identity mapping.
+4. JFrog issues an access token whose scope is defined by that mapping. All later `jf` and `npm` calls use it.
+5. Artifactory then checks the token's group against the **permission targets** for each repository.
+
+### OIDC integration settings
+
+| Setting | Value in this setup | Notes |
+|---|---|---|
+| Provider name | `github-oidc-cba-general` | Must equal `OIDC_PROVIDER_NAME` in the workflows |
+| Provider type | GitHub | |
+| Provider URL | `https://token.actions.githubusercontent.com` | GitHub's OIDC issuer |
+| Audience | `cba-github-actions` | Must equal `OIDC_AUDIENCE` in the workflows |
+| Organization | `jeffreyyk` | The GitHub owner whose repositories are trusted |
+| Enable permissive configuration | Off | Keep off so claims are matched strictly |
+
+### Identity mapping settings
+
+| Setting | Value in this setup | Notes |
+|---|---|---|
+| Name | `github-jeffreyyk` | |
+| Priority | `9999` | Decides which mapping wins when more than one matches |
+| Claims JSON | `iss`, `repository_owner`, `repository` (see below) | Token claims must match what is listed here |
+| Token scope | Group | The token gets the permissions of the named group |
+| Groups | `jk-cba-oidc` | This is the group that needs the repository permissions above |
+| Service | All | Token can be used with all JFrog services |
+| Token expiration | 1440 minutes (24 hours) | |
+| Self revocable OIDC token | Off | |
+
+The claims used here restrict token issuance to this repository:
+
+```json
+{
+  "iss": "https://token.actions.githubusercontent.com",
+  "repository_owner": "jeffreyyk",
+  "repository": "jeffreyyk/oidc-test-pipeline"
+}
+```
+
+A workflow in any other repository, even in the same organization, will not match this mapping and cannot get a token.
+
+### Things to know
+
+- **The group is what grants access.** The mapping only says *which group* the token represents. Repository access comes from permission targets on that group. If a mapping is correct but a job still fails with 403 or 404, the permission target is the usual cause (see [Troubleshooting](#troubleshooting)).
+- **Group names must match exactly.** Names are case-sensitive. A group named in the mapping that does not exist produces a token with no permissions from it.
+- **Project mappings take precedence.** The JFrog UI notes that project-level mappings override global ones. If the token scope is not what you expect, check the **Project** tab as well as **Global**.
+- **Tighten claims if needed.** GitHub's token carries more claims you can add to the mapping, such as `ref` (branch), `environment`, or `workflow`, to limit tokens to specific branches, environments or workflows.
+- **Consider a shorter expiry.** These workflows finish in minutes, so a 24-hour token is longer than needed. Lower the expiration, or enable self-revocable tokens, for production use.
+- **One mapping serves all three workflows.** They share the same provider, audience and mapping, so a permission change applies to all of them.
 
 ## Running a workflow
 
@@ -92,5 +147,7 @@ To see what the token actually carries, decode its payload (no secrets are print
 ├── oidc-npm-pull-push-remote-test.yml   # pull via remote repo
 ├── oidc-npm-publish-test-suite.yml      # publish to local repo
 └── oidc-npm-pull-local-test.yml         # pull from local repo
+docs/images/
+└── jfrog-identity-mapping.png           # screenshot used in this README
 README.md
 ```
