@@ -49,7 +49,8 @@ Repositories in these tests are **not** in a JFrog Project. If you move them int
 
 The workflows never hold a JFrog password or API key. Instead, `jfrog/setup-jfrog-cli` presents GitHub's short-lived OIDC token to JFrog, and JFrog exchanges it for a JFrog access token. Two objects in JFrog control this exchange: the **OIDC integration** (who is trusted) and the **identity mapping** (what the token can do).
 
-![JFrog OIDC integration and identity mapping settings](docs/images/jfrog-identity-mapping.png)
+<img width="1670" height="906" alt="image" src="https://github.com/user-attachments/assets/75909c3d-b488-411b-b7f1-7ca6d5eaf8fd" />
+
 
 ### How the exchange works
 
