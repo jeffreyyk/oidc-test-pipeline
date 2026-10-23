@@ -1,0 +1,112 @@
+# Place this file in .github/workflows/ on the repository's default branch to run it manually.
+# Requires a "default" runner with Node.js/npm and a JFrog OIDC mapping allowing this workflow.
+# Pulls a package previously published to the local repo jk-npm-dev-local (needs Read permission only).
+name: OIDC npm pull local test - JFrog Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - nonprod
+          - prod
+        default: nonprod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  OIDC_PROVIDER_NAME: github-oidc-cba-general
+  OIDC_AUDIENCE: cba-github-actions
+  JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
+  JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
+  NPM_REPOSITORY: jk-npm-dev-local
+  # Package already published to the local repo (taken from the Artifactory tree view)
+  PACKAGE_NAME: oidc-npm-cli-test-1427806057
+  PACKAGE_VERSION: 1.0.0-run.39726539830.1
+
+jobs:
+  test-oidc-npm:
+    name: npm Package - JFrog CLI (OIDC)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+          echo "=== Artifactory version ==="
+          jf rt curl api/system/version
+
+      - name: Pull npm package from jk-npm-dev-local - should pass
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/npm-test
+          cd /tmp/npm-test
+          echo '{"name":"oidc-test","version":"1.0.0"}' > package.json
+          jf npm-config --repo-resolve "$NPM_REPOSITORY"
+          jf npm install "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+          echo "Installed content:"
+          node -e "console.log(require('${PACKAGE_NAME}'))"
+          echo "npm install from ${NPM_REPOSITORY} succeeded - OIDC token has the required read permissions"
+
+  test-oidc-npm-raw:
+    name: npm Package - Native npm with OIDC Token
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        id: setup-cli
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+          echo "=== Artifactory version ==="
+          jf rt curl api/system/version
+
+      - name: Export OIDC token
+        env:
+          OIDC_TOKEN: ${{ steps.setup-cli.outputs.oidc-token }}
+        run: |
+          echo "::add-mask::$OIDC_TOKEN"
+          echo "JFROG_ACCESS_TOKEN=$OIDC_TOKEN" >> $GITHUB_ENV
+
+      - name: Configure native npm with OIDC token
+        run: |
+          npm config set registry "${JF_URL}/artifactory/api/npm/${NPM_REPOSITORY}/"
+          npm config set "//${JF_HOSTNAME}/artifactory/api/npm/${NPM_REPOSITORY}/:_authToken" "$JFROG_ACCESS_TOKEN"
+          echo "npm configured with OIDC token"
+
+      - name: Pull npm package from jk-npm-dev-local using native npm - should pass
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/npm-raw-test
+          cd /tmp/npm-raw-test
+          echo '{"name":"oidc-test","version":"1.0.0"}' > package.json
+          npm install "${PACKAGE_NAME}@${PACKAGE_VERSION}" --no-save
+          echo "Installed content:"
+          node -e "console.log(require('${PACKAGE_NAME}'))"
+          echo "npm install from ${NPM_REPOSITORY} using native npm with OIDC token succeeded"
