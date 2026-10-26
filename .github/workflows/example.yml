@@ -1,0 +1,48 @@
+# File: oidc-config/enhanced-artifactory-oidc-config-template.yml
+# Enhanced template supporting multiple workflows with different permission sets
+ 
+---
+oidc_access_request:
+  # Scenario 1: Single workflow with  multiple  repositories  for each permission type 
+  - github:
+      workflows:
+        - CBA-General/artifactory-oidc-mvp/.github/workflows/workflow1.yml@refs/heads/main
+      description: "CI workflow for component A"
+    artifactory:
+      permissions:
+        - read:
+          - applicationinfrastructure-ceph-docker-dev-local
+          - applicationinfrastructure-maven-snapshot-local
+          - applicationinfrastructure-npm-dev-local
+    token_expiry_minutes: 30     # Max: 120 minutes
+ 
+  # Scenario 2: Multiple workflows  sharing the same permission sett
+  - github:
+      workflows:
+        - CBA-General/artifactory-oidc-mvp/.github/workflows/workflow2.yml@refs/heads/main
+        - CBA-General/artifactory-oidc-mvp/.github/workflows/workflow3.yml@refs/heads/main
+        - CBA-General/artifactory-oidc-mvp/.github/workflows/workflow4.yml@refs/heads/main
+      description: "CI/CD workflows for component B"
+    artifactory:
+      permissions:
+        - read:
+          - applicationinfrastructure-docker-common-local
+        - deploy:
+          - applicationinfrastructure-docker-custom-local
+    token_expiry_minutes: 60
+ 
+  # Scenario 3: Different workflows with  different permission sets
+  - github:
+      workflows:
+        - CBA-General/artifactory-oidc-mvp/.github/workflows/deploy-workflow1.yml@refs/heads/main
+        - CBA-General/artifactory-oidc-mvp/.github/workflows/deploy-workflow2.yml@refs/heads/main
+      description: "Production deployment workflow"
+    artifactory:
+      permissions:
+        - read:
+          - applicationinfrastructure-docker-base-local
+        - deploy:
+          - applicationinfrastructure-docker-prod-local
+        - delete:  # Additional permission type example
+          - applicationinfrastructure-docker-temp-local
+    token_expiry_minutes: 45

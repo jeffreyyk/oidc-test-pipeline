@@ -1,0 +1,127 @@
+# Place this file in .github/workflows/ on the repository's default branch to run it manually.
+# Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
+# Repository key used: jk-gradle-dev-local (assumed naming pattern jk-<type>-dev-<remote|local>; edit LOCAL_REPO below if yours differs).
+# The OIDC token's group needs Read, Deploy/Cache and Annotate on the repository. Each run publishes a new version; test packages remain in Artifactory.
+name: OIDC Gradle publish test - JFrog Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - nonprod
+          - prod
+        default: nonprod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  OIDC_PROVIDER_NAME: github-oidc-cba-general
+  OIDC_AUDIENCE: cba-github-actions
+  JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
+  JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
+  LOCAL_REPO: jk-gradle-dev-local
+  EXPECTED_PACKAGE_TYPE: gradle
+
+jobs:
+  test-oidc:
+    name: Gradle publish - OIDC access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        id: setup-cli
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+
+      - name: Export OIDC credentials
+        env:
+          OIDC_TOKEN: ${{ steps.setup-cli.outputs.oidc-token }}
+          OIDC_USER: ${{ steps.setup-cli.outputs.oidc-user }}
+        run: |
+          echo "::add-mask::$OIDC_TOKEN"
+          if [ -z "$OIDC_USER" ]; then
+            echo "::warning::oidc-user output is empty; clients that need basic auth may fail"
+          fi
+          {
+            echo "JF_OIDC_TOKEN=$OIDC_TOKEN"
+            echo "JF_OIDC_USER=$OIDC_USER"
+            echo "JF_OIDC_USER_ENC=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$OIDC_USER")"
+          } >> "$GITHUB_ENV"
+
+      - name: Check repository exists and has the expected package type
+        run: |
+          set -euo pipefail
+          status=$(jf rt curl -XGET "api/repositories/${LOCAL_REPO}" -s -o "$RUNNER_TEMP/repo.json" -w "%{http_code}")
+          echo "HTTP $status for repository config"
+          if [ "$status" != "200" ]; then
+            head -c 1000 "$RUNNER_TEMP/repo.json"; echo
+            echo "::error::Cannot read repository ${LOCAL_REPO} (HTTP $status)"
+            exit 1
+          fi
+          jq '{key, rclass, packageType}' "$RUNNER_TEMP/repo.json"
+          actual=$(jq -r '.packageType // ""' "$RUNNER_TEMP/repo.json" | tr '[:upper:]' '[:lower:]')
+          if [ "$actual" != "$EXPECTED_PACKAGE_TYPE" ]; then
+            echo "::warning::Repository packageType is '$actual', expected '$EXPECTED_PACKAGE_TYPE'"
+          fi
+
+      - name: Publish with native Gradle (maven-publish)
+        run: |
+          set -eu
+          verify() {
+            local s
+            s=$(jf rt curl -XGET "$1" -s -L -o /dev/null -w "%{http_code}")
+            echo "HTTP $s for $1"
+            [ "$s" = "200" ] || { echo "::error::Verification failed for $1 (HTTP $s)"; exit 1; }
+          }
+          workdir=$(mktemp -d "$RUNNER_TEMP/publish.XXXXXX")
+          cd "$workdir"
+
+          version="1.0.0-run.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          mkdir -p src/main/java/com/example
+          printf 'package com.example;\npublic class Hello { public static String hi() { return "hi"; } }\n' > src/main/java/com/example/Hello.java
+          cat > build.gradle <<'EOF'
+          plugins {
+            id 'java'
+            id 'maven-publish'
+          }
+          group = 'com.example.oidc'
+          version = System.getenv('PKG_VERSION')
+          publishing {
+            publications {
+              mavenJava(MavenPublication) {
+                artifactId = 'oidc-gradle-test'
+                from components.java
+              }
+            }
+            repositories {
+              maven {
+                url = uri("${System.getenv('JF_URL')}/artifactory/${System.getenv('LOCAL_REPO')}")
+                credentials {
+                  username = System.getenv('JF_OIDC_USER')
+                  password = System.getenv('JF_OIDC_TOKEN')
+                }
+              }
+            }
+          }
+          EOF
+          echo "rootProject.name = 'oidc-gradle-test'" > settings.gradle
+          export PKG_VERSION="$version"
+          gradle --no-daemon --console=plain publish
+          verify "${LOCAL_REPO}/com/example/oidc/oidc-gradle-test/${version}/oidc-gradle-test-${version}.pom"

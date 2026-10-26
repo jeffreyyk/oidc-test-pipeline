@@ -1,0 +1,108 @@
+# Place this file in .github/workflows/ on the repository's default branch to run it manually.
+# Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
+# Repository key used: jk-go-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
+# The OIDC token's group needs Read and Deploy/Cache on the repository.
+name: OIDC Go test - JFrog Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - nonprod
+          - prod
+        default: nonprod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  OIDC_PROVIDER_NAME: github-oidc-cba-general
+  OIDC_AUDIENCE: cba-github-actions
+  JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
+  JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
+  REMOTE_REPO: jk-go-dev-remote
+  EXPECTED_PACKAGE_TYPE: go
+
+jobs:
+  test-oidc:
+    name: Go - OIDC access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        id: setup-cli
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+
+      - name: Export OIDC credentials
+        env:
+          OIDC_TOKEN: ${{ steps.setup-cli.outputs.oidc-token }}
+          OIDC_USER: ${{ steps.setup-cli.outputs.oidc-user }}
+        run: |
+          echo "::add-mask::$OIDC_TOKEN"
+          if [ -z "$OIDC_USER" ]; then
+            echo "::warning::oidc-user output is empty; clients that need basic auth may fail"
+          fi
+          {
+            echo "JF_OIDC_TOKEN=$OIDC_TOKEN"
+            echo "JF_OIDC_USER=$OIDC_USER"
+            echo "JF_OIDC_USER_ENC=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$OIDC_USER")"
+          } >> "$GITHUB_ENV"
+
+      - name: Check repository exists and has the expected package type
+        run: |
+          set -euo pipefail
+          status=$(jf rt curl -XGET "api/repositories/${REMOTE_REPO}" -s -o "$RUNNER_TEMP/repo.json" -w "%{http_code}")
+          echo "HTTP $status for repository config"
+          if [ "$status" != "200" ]; then
+            head -c 1000 "$RUNNER_TEMP/repo.json"; echo
+            echo "::error::Cannot read repository ${REMOTE_REPO} (HTTP $status)"
+            exit 1
+          fi
+          jq '{key, rclass, packageType}' "$RUNNER_TEMP/repo.json"
+          actual=$(jq -r '.packageType // ""' "$RUNNER_TEMP/repo.json" | tr '[:upper:]' '[:lower:]')
+          if [ "$actual" != "$EXPECTED_PACKAGE_TYPE" ]; then
+            echo "::warning::Repository packageType is '$actual', expected '$EXPECTED_PACKAGE_TYPE'"
+          fi
+
+      - name: Direct download through remote repo (version list for github.com/pkg/errors)
+        run: |
+          set -euo pipefail
+          path="api/go/${REMOTE_REPO}/github.com/pkg/errors/@v/list"
+          status=$(jf rt curl -XGET "$path" -s -L -o "$RUNNER_TEMP/direct.out" -w "%{http_code}")
+          echo "HTTP $status for $path"
+          if [ "$status" != "200" ]; then
+            echo "Response body (first 1000 bytes):"
+            head -c 1000 "$RUNNER_TEMP/direct.out"; echo
+            echo "::error::Expected HTTP 200 (403/404 usually means missing Read or Deploy/Cache on the repo, or a wrong path for your upstream)"
+            exit 1
+          fi
+
+      - name: Download module with native Go client
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d "$RUNNER_TEMP/go-test.XXXXXX")
+          cd "$workdir"
+          go mod init example.com/oidc-test
+          export GOPROXY="https://${JF_OIDC_USER_ENC}:${JF_OIDC_TOKEN}@${JF_HOSTNAME}/artifactory/api/go/${REMOTE_REPO}"
+          export GONOSUMDB='*'
+          export GOSUMDB=off
+          go get github.com/pkg/errors@v0.9.1
+          go list -m github.com/pkg/errors
+          echo "go get through ${REMOTE_REPO} succeeded"
