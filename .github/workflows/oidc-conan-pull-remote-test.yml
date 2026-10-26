@@ -2,7 +2,7 @@
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-conan-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
 # The OIDC token's group needs Read and Deploy/Cache on the repository. Uses Conan 2 syntax; assumes the remote repo mirrors ConanCenter.
-name: OIDC Conan test - JFrog Platform
+name: OIDC Conan pull remote test - JFrog Platform
 
 on:
   workflow_dispatch:
