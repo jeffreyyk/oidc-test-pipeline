@@ -2,7 +2,7 @@
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-go-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
 # The OIDC token's group needs Read and Deploy/Cache on the repository.
-name: OIDC Go test - JFrog Platform
+name: OIDC Go pull remote test - JFrog Platform
 
 on:
   workflow_dispatch:
