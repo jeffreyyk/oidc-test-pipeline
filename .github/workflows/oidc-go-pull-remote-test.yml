@@ -28,7 +28,7 @@ env:
   JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
   JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
   REMOTE_REPO: jk-go-dev-remote
-  RESOLVE_REPO: jk-go-dev-remote
+  RESOLVE_REPO: jk-go-dev-virtual
   EXPECTED_PACKAGE_TYPE: go
 
 jobs:
