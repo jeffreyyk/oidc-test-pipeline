@@ -2,7 +2,7 @@
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-conan-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
 # The OIDC token's group needs Read and Deploy/Cache on the repository. Uses Conan 2 syntax; assumes the remote repo mirrors ConanCenter.
-name: OIDC Conan pull remote test - JFrog Platform
+name: OIDC Conan test - JFrog Platform
 
 on:
   workflow_dispatch:
@@ -119,5 +119,8 @@ jobs:
           conan profile detect --force
           conan remote add artifactory "${JF_URL}/artifactory/api/conan/${REMOTE_REPO}"
           conan remote login artifactory "$JF_OIDC_USER" -p "$JF_OIDC_TOKEN"
-          jf conan download zlib/1.3.1 -r artifactory --only-recipe
+          # setup-jfrog-cli sets build name/number, which makes jf conan look for a conanfile.
+          # This test only downloads a recipe, so clear them for this command.
+          env -u JFROG_CLI_BUILD_NAME -u JFROG_CLI_BUILD_NUMBER \
+            jf conan download zlib/1.3.1 -r artifactory --only-recipe
           echo "jf conan download through ${REMOTE_REPO} succeeded"
