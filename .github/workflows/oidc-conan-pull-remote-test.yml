@@ -2,7 +2,7 @@
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-conan-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
 # The OIDC token's group needs Read and Deploy/Cache on the repository. Uses Conan 2 syntax; assumes the remote repo mirrors ConanCenter.
-name: OIDC Conan pull remote test - JFrog Platform
+name: OIDC Conan test - JFrog Platform
 
 on:
   workflow_dispatch:
@@ -81,10 +81,10 @@ jobs:
             echo "::warning::Repository packageType is '$actual', expected '$EXPECTED_PACKAGE_TYPE'"
           fi
 
-      - name: Direct download through remote repo (Conan v2 ping)
+      - name: Direct download through remote repo (latest recipe revision of zlib/1.3.1)
         run: |
           set -euo pipefail
-          path="api/conan/${REMOTE_REPO}/v2/ping"
+          path="api/conan/${REMOTE_REPO}/v2/conans/zlib/1.3.1/_/_/latest"
           status=$(jf rt curl -XGET "$path" -s -L -o "$RUNNER_TEMP/direct.out" -w "%{http_code}")
           echo "HTTP $status for $path"
           if [ "$status" != "200" ]; then
@@ -95,6 +95,7 @@ jobs:
           fi
 
       - name: Download recipe with native Conan 2 client
+        if: always()
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/conan-venv"
@@ -106,3 +107,17 @@ jobs:
           conan remote login artifactory "$JF_OIDC_USER" -p "$JF_OIDC_TOKEN"
           conan download zlib/1.3.1 -r artifactory --only-recipe
           echo "conan download through ${REMOTE_REPO} succeeded"
+
+      - name: Download recipe with JFrog CLI (jf conan)
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/conan-venv-cli"
+          "$RUNNER_TEMP/conan-venv-cli/bin/pip" install --quiet conan
+          export PATH="$RUNNER_TEMP/conan-venv-cli/bin:$PATH"
+          export CONAN_HOME="$RUNNER_TEMP/conan-home-cli"
+          conan profile detect --force
+          conan remote add artifactory "${JF_URL}/artifactory/api/conan/${REMOTE_REPO}"
+          conan remote login artifactory "$JF_OIDC_USER" -p "$JF_OIDC_TOKEN"
+          jf conan download zlib/1.3.1 -r artifactory --only-recipe
+          echo "jf conan download through ${REMOTE_REPO} succeeded"
