@@ -2,7 +2,7 @@
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-docker-dev-local (assumed naming pattern jk-<type>-dev-<remote|local>; edit LOCAL_REPO below if yours differs).
 # The OIDC token's group needs Read, Deploy/Cache and Annotate on the repository. Each run publishes a new version; test packages remain in Artifactory.
-name: OIDC Docker publish test - JFrog Platform
+name: OIDC Docker publish local test - JFrog Platform
 
 on:
   workflow_dispatch:
