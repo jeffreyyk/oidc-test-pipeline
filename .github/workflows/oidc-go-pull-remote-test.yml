@@ -1,7 +1,9 @@
 # Place this file in .github/workflows/ on the repository's default branch to run it manually.
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-go-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
-# The OIDC token's group needs Read and Deploy/Cache on the repository.
+# The OIDC token's group needs Read and Deploy/Cache on the remote repo, and Read on the virtual repo.
+# Go remote repos cannot be used directly: pulls go through a Go virtual repo (RESOLVE_REPO) that includes the remote.
+# Two jobs show up separately in GitHub Actions: one using the JFrog CLI wrapper, one using the native Go client.
 name: OIDC Go pull remote test - JFrog Platform
 
 on:
@@ -26,11 +28,109 @@ env:
   JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
   JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
   REMOTE_REPO: jk-go-dev-remote
+  RESOLVE_REPO: jk-go-dev-virtual
   EXPECTED_PACKAGE_TYPE: go
 
 jobs:
-  test-oidc:
-    name: Go - OIDC access
+  test-oidc-go:
+    name: Go package - JFrog CLI (OIDC)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+          echo "=== Artifactory version ==="
+          jf rt curl api/system/version -s | jq '{version, revision}'
+
+      - name: Check repository exists and has the expected package type
+        run: |
+          set -euo pipefail
+          status=$(jf rt curl -XGET "api/repositories/${REMOTE_REPO}" -s -o "$RUNNER_TEMP/repo.json" -w "%{http_code}")
+          echo "HTTP $status for repository config"
+          if [ "$status" != "200" ]; then
+            head -c 1000 "$RUNNER_TEMP/repo.json"; echo
+            echo "::error::Cannot read repository ${REMOTE_REPO} (HTTP $status)"
+            exit 1
+          fi
+          jq '{key, rclass, packageType}' "$RUNNER_TEMP/repo.json"
+          actual=$(jq -r '.packageType // ""' "$RUNNER_TEMP/repo.json" | tr '[:upper:]' '[:lower:]')
+          if [ "$actual" != "$EXPECTED_PACKAGE_TYPE" ]; then
+            echo "::warning::Repository packageType is '$actual', expected '$EXPECTED_PACKAGE_TYPE'"
+          fi
+
+      - name: Direct download through virtual repo (version list for github.com/pkg/errors)
+        run: |
+          set -euo pipefail
+          path="api/go/${RESOLVE_REPO}/github.com/pkg/errors/@v/list"
+          status=$(jf rt curl -XGET "$path" -s -L -o "$RUNNER_TEMP/direct.out" -w "%{http_code}")
+          echo "HTTP $status for $path"
+          if [ "$status" != "200" ]; then
+            echo "Response body (first 1000 bytes):"
+            head -c 1000 "$RUNNER_TEMP/direct.out"; echo
+            echo "::error::Expected HTTP 200 (see the response body above for the reason)"
+            exit 1
+          fi
+          echo "$path" >> "$RUNNER_TEMP/verified.txt"
+
+      - name: Download module with JFrog CLI (jf go)
+        if: always()
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d "$RUNNER_TEMP/go-cli-test.XXXXXX")
+          cd "$workdir"
+          go mod init example.com/oidc-cli-test
+          export GOSUMDB=off
+          export GONOSUMDB='*'
+          # Resolve modules through the Go virtual repo (the remote cannot be used directly)
+          jf go-config --repo-resolve "$RESOLVE_REPO"
+          # Clear build name/number so no build-info collection is attempted (see the Conan workflow)
+          env -u JFROG_CLI_BUILD_NAME -u JFROG_CLI_BUILD_NUMBER \
+            jf go get github.com/pkg/errors@v0.9.1
+          go list -m github.com/pkg/errors
+          echo "github.com/pkg/errors@v0.9.1 via jf go" >> "$RUNNER_TEMP/verified.txt"
+          echo "jf go get through ${RESOLVE_REPO} succeeded"
+
+      - name: Job summary
+        if: always()
+        env:
+          TARGET_ENV: ${{ inputs.env }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Go package - JFrog CLI (OIDC)"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Result | ${JOB_STATUS} |"
+            echo "| Target environment | ${TARGET_ENV} |"
+            echo "| Artifactory | ${JF_URL} |"
+            echo "| Repository | ${REMOTE_REPO} |"
+            echo "| Resolve repository | ${RESOLVE_REPO} |"
+            if [ -f "$RUNNER_TEMP/repo.json" ]; then
+              jq -r '"| Repository type | \(.rclass) / \(.packageType) |"' "$RUNNER_TEMP/repo.json"
+            fi
+            echo "| Workflow run | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |"
+            if [ -f "$RUNNER_TEMP/verified.txt" ]; then
+              echo ""
+              echo "**Verified:**"
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/verified.txt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  test-oidc-go-raw:
+    name: Go package - Native Go with OIDC Token
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -49,6 +149,8 @@ jobs:
         run: |
           echo "=== Server ping ==="
           jf rt ping
+          echo "=== Artifactory version ==="
+          jf rt curl api/system/version -s | jq '{version, revision}'
 
       - name: Export OIDC credentials
         env:
@@ -65,44 +167,39 @@ jobs:
             echo "JF_OIDC_USER_ENC=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$OIDC_USER")"
           } >> "$GITHUB_ENV"
 
-      - name: Check repository exists and has the expected package type
-        run: |
-          set -euo pipefail
-          status=$(jf rt curl -XGET "api/repositories/${REMOTE_REPO}" -s -o "$RUNNER_TEMP/repo.json" -w "%{http_code}")
-          echo "HTTP $status for repository config"
-          if [ "$status" != "200" ]; then
-            head -c 1000 "$RUNNER_TEMP/repo.json"; echo
-            echo "::error::Cannot read repository ${REMOTE_REPO} (HTTP $status)"
-            exit 1
-          fi
-          jq '{key, rclass, packageType}' "$RUNNER_TEMP/repo.json"
-          actual=$(jq -r '.packageType // ""' "$RUNNER_TEMP/repo.json" | tr '[:upper:]' '[:lower:]')
-          if [ "$actual" != "$EXPECTED_PACKAGE_TYPE" ]; then
-            echo "::warning::Repository packageType is '$actual', expected '$EXPECTED_PACKAGE_TYPE'"
-          fi
-
-      - name: Direct download through remote repo (version list for github.com/pkg/errors)
-        run: |
-          set -euo pipefail
-          path="api/go/${REMOTE_REPO}/github.com/pkg/errors/@v/list"
-          status=$(jf rt curl -XGET "$path" -s -L -o "$RUNNER_TEMP/direct.out" -w "%{http_code}")
-          echo "HTTP $status for $path"
-          if [ "$status" != "200" ]; then
-            echo "Response body (first 1000 bytes):"
-            head -c 1000 "$RUNNER_TEMP/direct.out"; echo
-            echo "::error::Expected HTTP 200 (403/404 usually means missing Read or Deploy/Cache on the repo, or a wrong path for your upstream)"
-            exit 1
-          fi
-
       - name: Download module with native Go client
         run: |
           set -euo pipefail
           workdir=$(mktemp -d "$RUNNER_TEMP/go-test.XXXXXX")
           cd "$workdir"
           go mod init example.com/oidc-test
-          export GOPROXY="https://${JF_OIDC_USER_ENC}:${JF_OIDC_TOKEN}@${JF_HOSTNAME}/artifactory/api/go/${REMOTE_REPO}"
+          export GOPROXY="https://${JF_OIDC_USER_ENC}:${JF_OIDC_TOKEN}@${JF_HOSTNAME}/artifactory/api/go/${RESOLVE_REPO}"
           export GONOSUMDB='*'
           export GOSUMDB=off
           go get github.com/pkg/errors@v0.9.1
           go list -m github.com/pkg/errors
-          echo "go get through ${REMOTE_REPO} succeeded"
+          echo "github.com/pkg/errors@v0.9.1 via native go" >> "$RUNNER_TEMP/verified.txt"
+          echo "go get through ${RESOLVE_REPO} succeeded"
+
+      - name: Job summary
+        if: always()
+        env:
+          TARGET_ENV: ${{ inputs.env }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Go package - Native Go with OIDC Token"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Result | ${JOB_STATUS} |"
+            echo "| Target environment | ${TARGET_ENV} |"
+            echo "| Artifactory | ${JF_URL} |"
+            echo "| Resolve repository | ${RESOLVE_REPO} |"
+            echo "| Workflow run | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |"
+            if [ -f "$RUNNER_TEMP/verified.txt" ]; then
+              echo ""
+              echo "**Verified:**"
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/verified.txt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
