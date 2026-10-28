@@ -1,0 +1,225 @@
+# Place this file in .github/workflows/ on the repository's default branch to run it manually.
+# Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
+# Repository key used: jk-go-dev-local (assumed naming pattern jk-<type>-dev-<remote|local>; edit LOCAL_REPO below if yours differs).
+# The OIDC token's group needs Read, Deploy/Cache and Annotate on the repository. Each run publishes a new version; test packages remain in Artifactory.
+# Two jobs show up separately in GitHub Actions: one using the JFrog CLI wrapper (jf go-publish), one using the native Go
+# toolchain plus the OIDC token (Go has no publish command, so the module zip/.mod/.info files are built and uploaded directly).
+name: OIDC Go publish local test - JFrog Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - nonprod
+          - prod
+        default: nonprod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  OIDC_PROVIDER_NAME: github-oidc-cba-general
+  OIDC_AUDIENCE: cba-github-actions
+  JF_HOSTNAME: ${{ inputs.env == 'prod' && 'artifactory.cba' || 'psblr.jfrog.io' }}
+  JF_URL: ${{ inputs.env == 'prod' && 'https://artifactory.cba' || 'https://psblr.jfrog.io' }}
+  LOCAL_REPO: jk-go-dev-local
+  EXPECTED_PACKAGE_TYPE: go
+
+jobs:
+  test-oidc-go:
+    name: Go package - JFrog CLI (OIDC)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+          echo "=== Artifactory version ==="
+          jf rt curl api/system/version -s | jq '{version, revision}'
+
+      - name: Check repository exists and has the expected package type
+        run: |
+          set -euo pipefail
+          status=$(jf rt curl -XGET "api/repositories/${LOCAL_REPO}" -s -o "$RUNNER_TEMP/repo.json" -w "%{http_code}")
+          echo "HTTP $status for repository config"
+          if [ "$status" != "200" ]; then
+            head -c 1000 "$RUNNER_TEMP/repo.json"; echo
+            echo "::error::Cannot read repository ${LOCAL_REPO} (HTTP $status)"
+            exit 1
+          fi
+          jq '{key, rclass, packageType}' "$RUNNER_TEMP/repo.json"
+          actual=$(jq -r '.packageType // ""' "$RUNNER_TEMP/repo.json" | tr '[:upper:]' '[:lower:]')
+          if [ "$actual" != "$EXPECTED_PACKAGE_TYPE" ]; then
+            echo "::warning::Repository packageType is '$actual', expected '$EXPECTED_PACKAGE_TYPE'"
+          fi
+
+      - name: Publish Go module with JFrog CLI (jf go-publish)
+        run: |
+          set -eu
+          verify() {
+            local s
+            s=$(jf rt curl -XGET "$1" -s -L -o /dev/null -w "%{http_code}")
+            echo "HTTP $s for $1"
+            [ "$s" = "200" ] || { echo "::error::Verification failed for $1 (HTTP $s)"; exit 1; }
+            echo "$1" >> "$RUNNER_TEMP/verified.txt"
+          }
+          workdir=$(mktemp -d "$RUNNER_TEMP/publish.XXXXXX")
+          cd "$workdir"
+
+          version="v1.0.0-run.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          mkdir mod
+          cd mod
+          go mod init example.com/oidc-go-test
+          printf 'package oidcgotest\n\nfunc Hello() string { return "hi" }\n' > hello.go
+          jf go-config --repo-deploy "$LOCAL_REPO"
+          # Clear build name/number so no build-info collection is attempted (see the Conan workflow)
+          env -u JFROG_CLI_BUILD_NAME -u JFROG_CLI_BUILD_NUMBER \
+            jf go-publish "$version"
+          verify "${LOCAL_REPO}/example.com/oidc-go-test/@v/${version}.zip"
+
+      - name: Job summary
+        if: always()
+        env:
+          TARGET_ENV: ${{ inputs.env }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Go package - JFrog CLI (OIDC)"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Result | ${JOB_STATUS} |"
+            echo "| Target environment | ${TARGET_ENV} |"
+            echo "| Artifactory | ${JF_URL} |"
+            echo "| Repository | ${LOCAL_REPO} |"
+            if [ -f "$RUNNER_TEMP/repo.json" ]; then
+              jq -r '"| Repository type | \(.rclass) / \(.packageType) |"' "$RUNNER_TEMP/repo.json"
+            fi
+            echo "| Workflow run | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |"
+            if [ -f "$RUNNER_TEMP/verified.txt" ]; then
+              echo ""
+              echo "**Verified (HTTP 200):**"
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/verified.txt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  test-oidc-go-raw:
+    name: Go package - Native Go with OIDC Token
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup JFrog CLI
+        id: setup-cli
+        uses: jfrog/setup-jfrog-cli@deda456d982fc5e9a7a020b63eb0d2968aedd33e
+        env:
+          JF_URL: ${{ env.JF_URL }}
+        with:
+          oidc-provider-name: ${{ env.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ env.OIDC_AUDIENCE }}
+
+      - name: Verify OIDC connectivity
+        run: |
+          echo "=== Server ping ==="
+          jf rt ping
+          echo "=== Artifactory version ==="
+          jf rt curl api/system/version -s | jq '{version, revision}'
+
+      - name: Export OIDC credentials
+        env:
+          OIDC_TOKEN: ${{ steps.setup-cli.outputs.oidc-token }}
+          OIDC_USER: ${{ steps.setup-cli.outputs.oidc-user }}
+        run: |
+          echo "::add-mask::$OIDC_TOKEN"
+          if [ -z "$OIDC_USER" ]; then
+            echo "::warning::oidc-user output is empty; clients that need basic auth may fail"
+          fi
+          {
+            echo "JF_OIDC_TOKEN=$OIDC_TOKEN"
+            echo "JF_OIDC_USER=$OIDC_USER"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish Go module with native Go and the OIDC token
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d "$RUNNER_TEMP/publish-raw.XXXXXX")
+          cd "$workdir"
+
+          version="v1.0.0-run.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          module="example.com/oidc-go-raw-test"
+
+          # Build the module with the Go toolchain
+          mkdir mod
+          cd mod
+          go mod init "$module"
+          printf 'package oidcgoraw\n\nfunc Hello() string { return "hi" }\n' > hello.go
+
+          # A Go module zip must hold its files under <module>@<version>/
+          stage="$workdir/stage"
+          mkdir -p "${stage}/${module}@${version}"
+          cp go.mod hello.go "${stage}/${module}@${version}/"
+          (cd "$stage" && zip -qr "$workdir/${version}.zip" "${module%%/*}")
+          cp go.mod "$workdir/${version}.mod"
+          printf '{"Version":"%s","Time":"%s"}\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$workdir/${version}.info"
+
+          # Upload zip, mod and info with the OIDC token
+          base="${JF_URL}/artifactory/${LOCAL_REPO}/${module}/@v"
+          for ext in zip mod info; do
+            status=$(curl -s -o "$RUNNER_TEMP/put.out" -w "%{http_code}" -X PUT \
+              -H "Authorization: Bearer ${JF_OIDC_TOKEN}" \
+              -T "$workdir/${version}.${ext}" "${base}/${version}.${ext}")
+            echo "HTTP $status for PUT ${module}/@v/${version}.${ext}"
+            case "$status" in
+              200|201) ;;
+              *) head -c 1000 "$RUNNER_TEMP/put.out"; echo; echo "::error::Upload failed (HTTP $status)"; exit 1 ;;
+            esac
+          done
+
+          # Read the module back
+          for ext in zip mod info; do
+            status=$(curl -s -L -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${JF_OIDC_TOKEN}" "${base}/${version}.${ext}")
+            echo "HTTP $status reading ${module}/@v/${version}.${ext}"
+            [ "$status" = "200" ] || { echo "::error::Verification failed (HTTP $status)"; exit 1; }
+            echo "${LOCAL_REPO}/${module}/@v/${version}.${ext}" >> "$RUNNER_TEMP/verified.txt"
+          done
+
+      - name: Job summary
+        if: always()
+        env:
+          TARGET_ENV: ${{ inputs.env }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Go package - Native Go with OIDC Token"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Result | ${JOB_STATUS} |"
+            echo "| Target environment | ${TARGET_ENV} |"
+            echo "| Artifactory | ${JF_URL} |"
+            echo "| Repository | ${LOCAL_REPO} |"
+            echo "| Workflow run | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |"
+            if [ -f "$RUNNER_TEMP/verified.txt" ]; then
+              echo ""
+              echo "**Verified (HTTP 200):**"
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/verified.txt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
