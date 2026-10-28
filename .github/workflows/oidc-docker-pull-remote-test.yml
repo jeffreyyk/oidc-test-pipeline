@@ -2,7 +2,7 @@
 # Requires a runner with the tools noted below and a JFrog OIDC mapping allowing this workflow.
 # Repository key used: jk-docker-dev-remote (assumed naming pattern jk-<type>-dev-<remote|local>; edit REMOTE_REPO below if yours differs).
 # The OIDC token's group needs Read and Deploy/Cache on the repository. Pulls hello-world via the repository-path access method. Adjust if you use subdomain or port access.
-name: OIDC Docker test - JFrog Platform
+name: OIDC Docker pull remote test - JFrog Platform
 
 on:
   workflow_dispatch:
