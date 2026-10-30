@@ -171,8 +171,10 @@ jobs:
           dotnet nuget add source "${JF_URL}/artifactory/api/nuget/v3/${LOCAL_REPO}/index.json" \
             --name artifactory --username "$JF_OIDC_USER" --password "$JF_OIDC_TOKEN" \
             --store-password-in-clear-text --configfile nuget.config
+          # No --api-key: Artifactory reads that header as the credential, so a dummy value can cause a 403.
+          # Authentication comes from the username and token stored in nuget.config.
           dotnet nuget push "out/oidc-nuget-test.${version}.nupkg" --source artifactory \
-            --api-key unused --configfile nuget.config
+            --configfile nuget.config
           verify "${LOCAL_REPO}/oidc-nuget-test.${version}.nupkg"
 
       - name: Job summary
