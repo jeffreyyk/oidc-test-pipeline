@@ -7,7 +7,7 @@ npm was the first package type. These seven are the only packages added on top o
 | Package | Status | Clients covered |
 |---|---|---|
 | Conan | Done | Native only |
-| PyPI (Python) | Done | - |
+| PyPI (Python) | Done | Both |
 | Docker | Done | Native only |
 | Go | Done | Both |
 | Gradle | Done | Both |
