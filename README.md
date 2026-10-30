@@ -1,21 +1,52 @@
-# OIDC npm test pipeline for JFrog Platform
+# OIDC test pipeline for JFrog Platform
 
-GitHub Actions workflows that test npm access to JFrog Artifactory from GitHub Actions **without stored credentials**. Each workflow exchanges a GitHub OIDC token for a short-lived JFrog access token, then runs npm operations against Artifactory in two ways:
+## Additional package status
 
-- **JFrog CLI** (`jf npm ...`)
-- **Native npm**, using the OIDC token as the registry auth token
+npm was the first package type. These seven are the only packages added on top of it. Each has a **pull** workflow (through the remote repo) and a **publish** workflow (to the local repo). **Both** means the workflow has a JFrog CLI job and a native client job. **Native only** means there is no JFrog CLI job.
+
+| Package | Status | Clients covered |
+|---|---|---|
+| Conan | Done | Native only |
+| PyPI (Python) | Done | - |
+| Docker | Done | Native only |
+| Go | Done | Both |
+| Gradle | Done | Both |
+| NuGet | Done | Both |
+| Maven | Done | Both |
+
+Other Artifactory package types are not covered yet.
+
+GitHub Actions workflows that test access to JFrog Artifactory from GitHub Actions **without stored credentials**. Each workflow exchanges a GitHub OIDC token for a short-lived JFrog access token, then runs package operations against Artifactory in up to two ways:
+
+- **JFrog CLI**, using the wrapper for the package manager (`jf npm`, `jf mvn`, `jf go` and similar)
+- **Native client** (npm, Maven, pip and so on), using the OIDC token as the credential
 
 ## Workflows
 
+### npm
+
 | Workflow file | Purpose | Repository used | Access needed |
 |---|---|---|---|
-| `oidc-npm-pull-push-remote-test.yml` | Pull `lodash@4.17.21` through the npm remote repo | `jk-npm-dev-remote` | Read + Deploy/Cache |
-| `oidc-npm-publish-test-suite.yml` | Publish a generated test package, then verify it with `npm view` | `jk-npm-dev-local` | Read + Deploy/Cache + Annotate |
+| `oidc-npm-pull-remote-test.yml` | Pull `lodash@4.17.21` through the npm remote repo | `jk-npm-dev-remote` | Read + Deploy/Cache |
+| `oidc-npm-publish-local-test.yml` | Publish a generated test package, then verify it with `npm view` | `jk-npm-dev-local` | Read + Deploy/Cache + Annotate |
 | `oidc-npm-pull-local-test.yml` | Pull a package already published to the local repo | `jk-npm-dev-local` | Read |
+| `oidc-npm-pull-push-remote-debug.yml` | Debug version of the remote pull test, used while troubleshooting access | `jk-npm-dev-remote` | Read + Deploy/Cache |
 
-Despite its name, the `pull-push-remote` workflow only tests **pulls**. Publishing is covered by the publish workflow.
+### Additional packages
 
-All three workflows are manual (`workflow_dispatch`) and take one input:
+| Package | Pull workflow (remote repo) | Publish workflow (local repo) |
+|---|---|---|
+| Conan | `oidc-conan-pull-remote-test.yml` | `oidc-conan-publish-local-test.yml` |
+| PyPI (Python) | `oidc-pypi-pull-remote-test.yml` | `oidc-pypi-publish-local-test.yml` |
+| Docker | `oidc-docker-pull-remote-test.yml` | `oidc-docker-publish-local-test.yml` |
+| Go | `oidc-go-pull-remote-test.yml` | `oidc-go-publish-local-test.yml` |
+| Gradle | `oidc-gradle-pull-remote-test.yml` | `oidc-gradle-publish-local-test.yml` |
+| NuGet | `oidc-nuget-pull-remote-test.yml` | `oidc-nuget-publish-local-test.yml` |
+| Maven | `oidc-maven-pull-remote-test.yml` | `oidc-maven-publish-local-test.yml` |
+
+See [Additional package workflows](#additional-package-workflows) for the repositories and tests each one uses.
+
+All workflows are manual (`workflow_dispatch`) and take one input:
 
 | Input | Values | Effect |
 |---|---|---|
@@ -27,7 +58,7 @@ All three workflows are manual (`workflow_dispatch`) and take one input:
 
 - The workflow files are in `.github/workflows/` on the **default branch**. `workflow_dispatch` runs only appear once the file is on that branch.
 - Workflows request `id-token: write` and `contents: read`.
-- The runner needs Node.js and npm. Workflows use `ubuntu-latest` (or a self-hosted runner label such as `default`, if your organization defines one).
+- Workflows use `ubuntu-latest` (or a self-hosted runner label such as `default`, if your organization defines one). The tools each workflow needs (Node.js, Java, Maven, Gradle, .NET, Python, Go, Docker) are preinstalled there. Conan is installed by the workflow.
 
 ### JFrog
 
@@ -38,6 +69,10 @@ All three workflows are manual (`workflow_dispatch`) and take one input:
    |---|---|---|
    | `jk-npm-dev-remote` | npm remote | Read, **Deploy/Cache** |
    | `jk-npm-dev-local` | npm local | Read, Deploy/Cache, Annotate (publish only) |
+   | `jk-<package>-dev-remote` | remote, one per additional package | Read, **Deploy/Cache** |
+   | `jk-<package>-dev-local` | local, one per additional package | Read, Deploy/Cache, Annotate (publish only) |
+
+   Go pulls also need a Go **virtual** repo that includes the remote. Give the group Read on it.
 
    Include pattern `**`, with no excludes that match the test packages.
 
@@ -49,8 +84,7 @@ Repositories in these tests are **not** in a JFrog Project. If you move them int
 
 The workflows never hold a JFrog password or API key. Instead, `jfrog/setup-jfrog-cli` presents GitHub's short-lived OIDC token to JFrog, and JFrog exchanges it for a JFrog access token. Two objects in JFrog control this exchange: the **OIDC integration** (who is trusted) and the **identity mapping** (what the token can do).
 
-<img width="1670" height="906" alt="image" src="https://github.com/user-attachments/assets/75909c3d-b488-411b-b7f1-7ca6d5eaf8fd" />
-
+![JFrog OIDC integration and identity mapping settings](docs/images/jfrog-identity-mapping.png)
 
 ### How the exchange works
 
@@ -72,6 +106,8 @@ The workflows never hold a JFrog password or API key. Instead, `jfrog/setup-jfro
 | Enable permissive configuration | Off | Keep off so claims are matched strictly |
 
 ### Identity mapping settings
+<img width="1670" height="906" alt="image" src="https://github.com/user-attachments/assets/ced71aaa-9066-42e2-8059-c73576d7bd87" />
+
 
 | Setting | Value in this setup | Notes |
 |---|---|---|
@@ -103,7 +139,34 @@ A workflow in any other repository, even in the same organization, will not matc
 - **Project mappings take precedence.** The JFrog UI notes that project-level mappings override global ones. If the token scope is not what you expect, check the **Project** tab as well as **Global**.
 - **Tighten claims if needed.** GitHub's token carries more claims you can add to the mapping, such as `ref` (branch), `environment`, or `workflow`, to limit tokens to specific branches, environments or workflows.
 - **Consider a shorter expiry.** These workflows finish in minutes, so a 24-hour token is longer than needed. Lower the expiration, or enable self-revocable tokens, for production use.
-- **One mapping serves all three workflows.** They share the same provider, audience and mapping, so a permission change applies to all of them.
+- **One mapping serves all workflows.** They share the same provider, audience and mapping, so a permission change applies to all of them.
+
+## Additional package workflows
+
+Each additional package has two workflows, named `oidc-<package>-pull-remote-test.yml` and `oidc-<package>-publish-local-test.yml`.
+
+**Pull workflows** log in with OIDC, check that the remote repo exists and has the expected package type, download a known file directly through the repo (expecting HTTP 200), and then pull a small package with the client. **Publish workflows** build a small test package, publish it to the local repo, and verify it is stored. Versions include the run ID and attempt, so reruns never collide. Test packages stay in Artifactory.
+
+| Package | Remote repo | Local repo | Pull test | Publish test |
+|---|---|---|---|---|
+| Conan | `jk-conan-dev-remote` | `jk-conan-dev-local` | Download the `zlib/1.3.1` recipe | `conan create` and `conan upload` |
+| PyPI (Python) | `jk-pypi-dev-remote` | `jk-pypi-dev-local` | Download `requests==2.31.0` | Build the package and upload with Twine |
+| Docker | `jk-docker-dev-remote` | `jk-docker-dev-local` | Pull `hello-world` | Build, push, and pull back an image |
+| Go | `jk-go-dev-remote` | `jk-go-dev-local` | Download `github.com/pkg/errors@v0.9.1` | Publish a generated module |
+| Gradle | `jk-gradle-dev-remote` | `jk-gradle-dev-local` | Resolve `junit:junit:4.13.2` | Publish a generated jar |
+| NuGet | `jk-nuget-dev-remote` | `jk-nuget-dev-local` | Restore `Newtonsoft.Json` 13.0.3 | Pack and push a generated package |
+| Maven | `jk-maven-dev-remote` | `jk-maven-dev-local` | Resolve `junit:junit:4.13.2` | Deploy a generated jar |
+
+Repository keys are set at the top of each file (`REMOTE_REPO` and `LOCAL_REPO`). Edit them if yours differ.
+
+**Package-specific notes**
+
+- **Go:** pulls use `RESOLVE_REPO`. Artifactory rejects the Go API on a remote repo (HTTP 400, "cannot be used without a virtual repository"), so `RESOLVE_REPO` should be a Go virtual repo that includes `jk-go-dev-remote`.
+- **Conan:** the remote repo's upstream URL must be `https://center2.conan.io`, the Conan 2 ConanCenter.
+- **Maven and Gradle:** the pull tests assume the remote repo mirrors Maven Central.
+- **JFrog CLI jobs:** commands such as `jf mvn`, `jf go` and `jf pip` collect build-info when a build name is set. The workflows clear the build name and number for those commands so no build-info collection is attempted.
+- **Basic-auth clients** (Docker, pip, NuGet and similar) use the `oidc-user` and `oidc-token` outputs of `setup-jfrog-cli`.
+- **Permissions:** the group needs Read and Deploy/Cache on each remote repo, and Read, Deploy/Cache and Annotate on each local repo.
 
 ## Running a workflow
 
@@ -116,6 +179,7 @@ A workflow in any other repository, even in the same organization, will not matc
 - **Remote pull:** both jobs print an npm install success message and `added 1 package`. An `npm audit` warning about lodash is expected and unrelated to this setup.
 - **Publish:** both jobs end with `Verified <package>@<version> in jk-npm-dev-local`. Each run publishes new versions (`1.0.0-run.<run_id>.<attempt>`), tagged `oidc-test`. The packages are named `oidc-npm-cli-test-<repo id>` and `oidc-npm-raw-test-<repo id>` and stay in Artifactory after the run.
 - **Local pull:** both jobs print `OIDC npm publish test`, the content exported by the test package.
+- **Additional packages:** each job ends green and writes a job summary (target environment, repository and the paths or packages it verified) to the run page.
 
 ## Configuration notes
 
@@ -145,9 +209,24 @@ To see what the token actually carries, decode its payload (no secrets are print
 
 ```
 .github/workflows/
-├── oidc-npm-pull-push-remote-test.yml   # pull via remote repo
-├── oidc-npm-publish-test-suite.yml      # publish to local repo
-└── oidc-npm-pull-local-test.yml         # pull from local repo
+├── oidc-conan-publish-local-test.yml
+├── oidc-conan-pull-remote-test.yml
+├── oidc-docker-publish-local-test.yml
+├── oidc-docker-pull-remote-test.yml
+├── oidc-go-publish-local-test.yml
+├── oidc-go-pull-remote-test.yml
+├── oidc-gradle-publish-local-test.yml
+├── oidc-gradle-pull-remote-test.yml
+├── oidc-maven-publish-local-test.yml
+├── oidc-maven-pull-remote-test.yml
+├── oidc-npm-publish-local-test.yml
+├── oidc-npm-pull-local-test.yml
+├── oidc-npm-pull-push-remote-debug.yml
+├── oidc-npm-pull-remote-test.yml
+├── oidc-nuget-publish-local-test.yml
+├── oidc-nuget-pull-remote-test.yml
+├── oidc-pypi-publish-local-test.yml
+└── oidc-pypi-pull-remote-test.yml
 docs/images/
 └── jfrog-identity-mapping.png           # screenshot used in this README
 README.md
